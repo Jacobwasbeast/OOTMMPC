@@ -1,0 +1,43 @@
+{
+  "format": "ootmm.pc.seed.v1",
+  "seedId": "crossgame-test",
+  "settingsHash": "crossgame",
+  "playerId": 1,
+  "playerCount": 1,
+  "teamId": "default",
+  "startingGame": "oot",
+  "startingItems": [
+    { "itemGame": "oot", "itemId": "OOT_OCARINA", "itemName": "Fairy Ocarina", "count": 1 }
+  ],
+  "placements": [
+    {
+      "checkGame": "oot",
+      "checkId": "OOT_MARKET_MASK_SHOP_DELIVERY",
+      "checkName": "Mask Shop",
+      "itemGame": "mm",
+      "itemId": "MM_SONG_SOARING",
+      "itemName": "Song of Soaring",
+      "ownerPlayer": 1,
+      "sourcePlayer": 1,
+      "major": true
+    }
+  ],
+  "entrances": [
+    {
+      "fromGame": "oot",
+      "from": "OOT_SHOP_MASKS",
+      "fromNativeId": 1328,
+      "toGame": "mm",
+      "to": "MM_CLOCK_TOWN_FROM_CLOCK_TOWER",
+      "toNativeId": 55296
+    },
+    {
+      "fromGame": "mm",
+      "from": "MM_CLOCK_TOWER_FROM_CLOCK_TOWN",
+      "fromNativeId": 49168,
+      "toGame": "oot",
+      "to": "OOT_MARKET_FROM_MASK_SHOP",
+      "toNativeId": 465
+    }
+  ]
+}

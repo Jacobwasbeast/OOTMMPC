@@ -1,0 +1,9 @@
+﻿# PC-seed config: default OoTMM combo, but Mido does NOT block the Deku Tree.
+# dekuTree=open -> "Mido will not block the way, the Deku Tree will be open from the start."
+# (OoTMM setting key `dekuTree`, see packages/core/src/settings/data.ts:1158)
+# Generate with:
+#   cd external/OoTMM/packages/generator
+#   npx tsx ./lib/pc-seed-cli.ts --config ../../../../samples/mido-open.config.yml
+seed: midoopen
+settings:
+  dekuTree: open

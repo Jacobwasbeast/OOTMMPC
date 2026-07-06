@@ -1,0 +1,30 @@
+# Build output (CMake binary dir: launcher, server, core, tests, session scratch dirs)
+/build/
+
+# Game ROMs — never commit copyrighted game data
+/roms/
+*.z64
+
+# Runtime session state (per-seed progress, inboxes, boot configs) and game saves
+/.ootmm-session/
+/Save/
+
+# Shared vcpkg artifacts
+/.vcpkg-shared/
+
+# Python tooling artifacts
+__pycache__/
+*.pyc
+
+# IDE / editor local state
+.vs/
+.vscode/
+.idea/
+
+# Logs and local scratch
+*.log
+imgui.ini
+
+# Generated icon previews (tools/gen_launcher_icons.py --preview)
+/tools/icon_preview/
+/example seed

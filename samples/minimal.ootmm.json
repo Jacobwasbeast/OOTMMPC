@@ -1,0 +1,29 @@
+{
+  "format": "ootmm.pc.seed.v1",
+  "seedId": "sample-seed",
+  "settingsHash": "",
+  "playerId": 1,
+  "playerCount": 1,
+  "teamId": "default",
+  "startingItems": [
+    { "itemGame": "oot", "itemId": "OOT_DEKU_STICK", "itemName": "Deku Stick", "count": 1 }
+  ],
+  "placements": [
+    {
+      "checkGame": "oot",
+      "checkId": "OOT_KF_MIDOS_TOP_LEFT",
+      "checkName": "Mido Top Left",
+      "checkAliases": [
+        "OOT_KF_MIDOS_TOP_LEFT_CHEST",
+        "RC_KF_MIDOS_TOP_LEFT_CHEST"
+      ],
+      "itemGame": "mm",
+      "itemId": "MM_BOW",
+      "itemName": "Hero's Bow",
+      "ownerPlayer": 1,
+      "sourcePlayer": 1,
+      "major": true
+    }
+  ],
+  "entrances": []
+}

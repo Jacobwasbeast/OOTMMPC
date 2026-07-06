@@ -1,0 +1,25 @@
+#pragma once
+
+// GENERATED at CMake configure time from the ports' foreign-model dispatch tables
+// (OotmmSohForeignModels.inc / Ootmm2s2hForeignModels.inc). Do not edit.
+// A trailing nullptr sentinel keeps the arrays well-formed when a table is empty/missing.
+
+#include <cstddef>
+
+namespace ootmm::launcher {
+
+// Namespaced object dirs referenced by SoH's table (objects/mm_obj_* + passthrough dirs).
+inline constexpr const char* kOotmmSohForeignModelDirs[] = {
+@OOTMM_SOH_MODEL_DIRS@    nullptr,
+};
+inline constexpr size_t kOotmmSohForeignModelDirCount =
+    sizeof(kOotmmSohForeignModelDirs) / sizeof(kOotmmSohForeignModelDirs[0]) - 1;
+
+// Namespaced object dirs referenced by 2S2H's table (objects/ot_obj_* + passthrough dirs).
+inline constexpr const char* kOotmm2s2hForeignModelDirs[] = {
+@OOTMM_2S2H_MODEL_DIRS@    nullptr,
+};
+inline constexpr size_t kOotmm2s2hForeignModelDirCount =
+    sizeof(kOotmm2s2hForeignModelDirs) / sizeof(kOotmm2s2hForeignModelDirs[0]) - 1;
+
+} // namespace ootmm::launcher

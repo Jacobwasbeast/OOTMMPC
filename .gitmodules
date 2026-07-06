@@ -1,0 +1,15 @@
+[submodule "external/Shipwright"]
+	path = external/Shipwright
+	url = https://github.com/jacobwasbeast/Shipwright.git
+	branch = pre-release
+	ignore = untracked
+[submodule "external/2ship2harkinian"]
+	path = external/2ship2harkinian
+	url = https://github.com/jacobwasbeast/2ship2harkinian.git
+	branch = pre-release
+	ignore = untracked
+[submodule "external/OoTMM"]
+	path = external/OoTMM
+	url = https://github.com/jacobwasbeast/OoTMM.git
+	branch = pre-release
+	ignore = untracked
