@@ -40,6 +40,61 @@ int Seed::GetIntSetting(const std::string& key, int fallback) const {
     return it != numberSettings.end() ? static_cast<int>(it->second) : fallback;
 }
 
+std::vector<std::string> Seed::UnsupportedEnabledSettings() const {
+    std::vector<std::string> out;
+    // og-payload custom ability items: ids deliver but the engine lacks the ability implementation.
+    static constexpr const char* kUnsupportedBools[] = {
+        "spellFireMm",  "spellWindMm",   "spellLoveMm",    "hammerMm",       "bootsIronMm",
+        "bootsHoverMm", "tunicGoronMm",  "tunicZoraMm",    "sunSongMm",      "fairyOcarinaMm",
+        "shortHookshotMm", "blastMaskOot", "stoneMaskOot", "elegyOot",       "spinUpgradeOot",
+        // ER behavior modes with actor-level requirements beyond the entrance override table.
+        "erWallmasters", "erOneWaysWaterVoids", "erOneWaysWoods", "alterLostWoodsExits",
+        // Cross-game warp/ability triggers.
+        "crossWarpOot", "crossWarpMm", "crossGameFw",
+        // Shared consumable/upgrade pools (persistent capabilities DO mirror; live pools don't).
+        "sharedWallets", "sharedBows", "sharedBombBags", "sharedMagic", "sharedHealth",
+        "sharedBottles",
+        // Economy extensions.
+        "colossalWallets", "bottomlessWallets", "rupeeScaling", "coins",
+        // Misc unhonored behaviors.
+        "voidWarpMm", "swordlessAdult", "restoreBrokenActors", "preCompletedDungeons",
+        "songEventsShuffleOot", "iceArrowPlatformsOot", "kegStrength3",
+    };
+    for (const char* key : kUnsupportedBools) {
+        if (GetBoolSetting(key, false)) {
+            out.emplace_back(key);
+        }
+    }
+    if (GetStringSetting("songs", "songLocations") == "notes") {
+        out.emplace_back("songs=notes");
+    }
+    if (GetStringSetting("ageChange", "none") != "none") {
+        out.emplace_back("ageChange=" + GetStringSetting("ageChange"));
+    }
+    if (GetStringSetting("clockSpeed", "default") != "default") {
+        out.emplace_back("clockSpeed=" + GetStringSetting("clockSpeed"));
+    }
+    if (GetStringSetting("autoInvert", "never") != "never") {
+        out.emplace_back("autoInvert=" + GetStringSetting("autoInvert"));
+    }
+    if (GetStringSetting("erBoss", "none") != "none") {
+        out.emplace_back("erBoss=" + GetStringSetting("erBoss"));
+    }
+    if (GetStringSetting("majoraChild", "none") == "custom") {
+        out.emplace_back("majoraChild=custom");
+    }
+    if (GetStringSetting("mode", "single") == "coop") {
+        out.emplace_back("mode=coop");
+    }
+    for (const char* priceKey : { "priceOotShops", "priceMmShops", "priceOotScrubs", "priceOotMerchants",
+                                  "priceMmTingle" }) {
+        if (GetStringSetting(priceKey, "vanilla") != "vanilla") {
+            out.emplace_back(std::string(priceKey) + "=" + GetStringSetting(priceKey));
+        }
+    }
+    return out;
+}
+
 const Seed::WorldFlag* Seed::GetWorldFlag(const std::string& key) const {
     const auto it = worldFlags.find(key);
     return it != worldFlags.end() ? &it->second : nullptr;

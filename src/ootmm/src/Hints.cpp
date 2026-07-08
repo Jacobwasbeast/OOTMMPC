@@ -395,8 +395,17 @@ std::string JunkText(int id) {
 
 const ItemPlacement* FindPlacementByName(const Seed& seed, Game game, const std::string& name) {
     for (const ItemPlacement& p : seed.placements) {
-        if (p.check.game == game && p.check.name == name) {
+        if (p.check.game != game) {
+            continue;
+        }
+        // Match id and aliases too: pc-seed exports region-qualified names, so a bare-name compare misses.
+        if (p.check.name == name || p.check.id == name) {
             return &p;
+        }
+        for (const std::string& alias : p.check.aliases) {
+            if (alias == name) {
+                return &p;
+            }
         }
     }
     return nullptr;
@@ -488,9 +497,10 @@ std::string AltarChildText(const Seed& seed) {
     }
     out += "@b";
     out += "It is also written that reuniting the @YSpiritual Stones @0leads to ";
-    AppendNpcReward(out, seed, "OOT Ocarina of Time", StaticImportance(seed, 5));
+    // pc-seed exports these checks under OOT_HYRULE_FIELD_ ids (alias-aware lookup resolves either form).
+    AppendNpcReward(out, seed, "OOT_HYRULE_FIELD_OCARINA_OF_TIME", StaticImportance(seed, 5));
     out += " and ";
-    AppendNpcReward(out, seed, "OOT Song of Time", StaticImportance(seed, 6));
+    AppendNpcReward(out, seed, "OOT_HYRULE_FIELD_SONG_OF_TIME", StaticImportance(seed, 6));
     out += ".";
     return out;
 }
@@ -511,6 +521,21 @@ std::string AltarAdultText(const Seed& seed) {
         !seed.hints.ganonBossKey.name.empty()) {
         out += "@b";
         AppendRegionName(out, seed, seed.hints.ganonBossKey, TF_PREPOS | TF_CAPITALIZE);
+        out += "...";
+    }
+    return out;
+}
+
+std::string RemainsHintText(const Seed& seed) {
+    // og comboTextHijackDungeonRewardHints (text.c:1206-1220): dungeonRewards[9..12], one line per remains.
+    std::string out;
+    bool first = true;
+    for (size_t i = 9; i < 13 && i < seed.hints.dungeonRewards.size(); ++i) {
+        if (!first) {
+            out += "@b";
+        }
+        first = false;
+        AppendRegionName(out, seed, seed.hints.dungeonRewards[i], TF_PREPOS | TF_CAPITALIZE);
         out += "...";
     }
     return out;

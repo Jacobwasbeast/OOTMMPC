@@ -33,6 +33,10 @@ struct Seed {
     [[nodiscard]] std::string GetStringSetting(const std::string& key, const std::string& fallback = "") const;
     [[nodiscard]] int GetIntSetting(const std::string& key, int fallback = 0) const;
 
+    // Settings this seed enables that the PC port does not implement yet; their items/gates are
+    // non-functional, so the launcher/ports surface the list at load. Empty = fully supported.
+    [[nodiscard]] std::vector<std::string> UnsupportedEnabledSettings() const;
+
     // A resolved OoTMM "world flag" set (e.g. ganonTrials, openDungeonsOot). In the
     // seed JSON each is "none" (empty), "all" (every member), or an explicit member
     // list. `all` is preserved so membership/count queries stay correct without the

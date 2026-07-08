@@ -32,6 +32,10 @@ struct BootConfig {
     // scene with checks after the save loads and streams a JSONL report here.
     std::string selftestReportPath;
 
+    // Self-test mode: "audit" (default sweep), "collect", or "verify" (audit + collect + cross-game
+    // handoff); collection modes run on an isolated "<tag>_verify" save/ledger.
+    std::string selftestMode;
+
     // When false (the default), the port hides its debug / cheats / enhancements menus so players
     // cannot cheat mid-seed; the launcher flips this via an opt-in option, effective next boot.
     bool allowDebugMenus = false;

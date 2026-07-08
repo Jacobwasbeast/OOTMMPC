@@ -58,6 +58,7 @@ if(WIN32)
         src/launcher/ForeignModelMods.cpp
         src/launcher/CsmcArtData.gen.cpp
         src/launcher/Tracker.cpp
+        src/launcher/Progress.cpp
         third_party/miniz/miniz.c
         third_party/imgui/imgui.cpp
         third_party/imgui/imgui_draw.cpp
@@ -94,4 +95,9 @@ if(OOTMMPC_BUILD_TESTS)
     add_executable(ootmm_load_testseed tests/load_testseed.cpp)
     target_link_libraries(ootmm_load_testseed PRIVATE ootmm_core)
     target_compile_features(ootmm_load_testseed PRIVATE cxx_std_20)
+
+    # Headless seed completability verifier (structural + multiworld)
+    add_executable(ootmm_verify_seed tests/ootmm_verify_seed.cpp)
+    target_link_libraries(ootmm_verify_seed PRIVATE ootmm_core)
+    target_compile_features(ootmm_verify_seed PRIVATE cxx_std_20)
 endif()

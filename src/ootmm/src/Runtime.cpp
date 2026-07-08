@@ -183,6 +183,12 @@ bool Runtime::ApplyRemoteCheckComplete(const NetworkEvent& event, Game activeGam
         return false; // tolerate checks this client's seed copy does not know
     }
 
+    // Own-world scoping (og multi.c:706-750 isSamePlayer): another player's CheckComplete refers to
+    // THEIR copy of the check; items they route to us arrive as their own GIVE_ITEM packets.
+    if (event.sourcePlayer != seed_.playerId) {
+        return false;
+    }
+
     const bool newlyMarked = completedChecks_.insert(CheckKey(placement->check.game, placement->check.id)).second;
 
     // Replay of OUR OWN collection history: restore the locally-owned item too. On a resumed
@@ -551,6 +557,24 @@ bool Runtime::IsItemGranted(const std::string& deliveryKey) const {
 
 void Runtime::MarkItemGranted(const std::string& deliveryKey) {
     grantedKeys_.insert(deliveryKey);
+}
+
+const std::set<std::string>& Runtime::ObtainedItemIds() const {
+    return obtainedItemIds_;
+}
+
+std::size_t Runtime::CountGrantedItemIdOnce(const std::string& itemId) const {
+    const std::string suffix = ":" + itemId;
+    std::size_t count = 0;
+    for (const std::string& key : grantedKeys_) {
+        if (key.rfind("regrant:", 0) == 0) {
+            continue; // shared-item duplicate in another game; the origin grant already counted
+        }
+        if (key.size() >= suffix.size() && key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 std::size_t Runtime::CountGrantedItemId(const std::string& itemId) const {

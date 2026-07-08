@@ -14,6 +14,7 @@ add_library(ootmm_core
     src/Runtime.cpp
     src/Seed.cpp
     src/SimpleJson.cpp
+    src/SpecialCond.cpp
 )
 
 target_include_directories(ootmm_core

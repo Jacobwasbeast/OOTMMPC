@@ -64,6 +64,7 @@
 #include "ModelRepack.hpp"
 #include "SimpleJson.hpp"
 #include "Tracker.hpp"
+#include "Progress.hpp"
 
 #include "imgui.h"
 #else
@@ -102,6 +103,7 @@ struct Args {
     // In-game self-test: arms the scene-sweep check-claim audit in the booted game; the JSONL
     // report lands in the session dir as selftest-report.jsonl.
     bool selftest = false;
+    bool verify = false;
     // Build the cross-game model archives from the games' extracted base archives, then exit
     // (the same native builder the GUI Setup flow runs). Requires --oot and --mm.
     bool buildMods = false;
@@ -118,7 +120,7 @@ void PrintUsage() {
     std::cerr << "Usage: ootmm_launcher                      (opens the GUI launcher)\n"
                  "       ootmm_launcher --seed <seed.ootmm.json> --oot <soh.exe> --mm <2ship.exe>\n"
                  "                      [--session <dir>] [--start oot|mm]\n"
-                 "                      [--multiworld <host:port>] [--name <player name>] [--selftest]\n"
+                 "                      [--multiworld <host:port>] [--name <player name>] [--selftest] [--verify]\n"
                  "       ootmm_launcher --serve <port> [--pvp]   (run the multiworld relay server)\n"
                  "       ootmm_launcher --build-mods --oot <soh.exe> --mm <2ship.exe>\n"
                  "                      (build the cross-game model mod archives, then exit)\n";
@@ -177,6 +179,8 @@ std::optional<Args> ParseArgs(int argc, char** argv) {
             args.servePvp = true;
         } else if (flag == "--selftest") {
             args.selftest = true;
+        } else if (flag == "--verify") {
+            args.verify = true;
         } else if (flag == "--build-mods") {
             args.buildMods = true;
         } else if (flag == "--solve") {
@@ -658,6 +662,7 @@ struct Session {
     fs::path presenceOut; // the running port's own pose (atomic last-value)
     fs::path presenceIn;  // remote-player roster the coordinator mirrors for the port
     fs::path selftestReport; // non-empty arms the in-game check-claim audit (--selftest)
+    std::string selftestMode; // "" | "audit" | "verify" (--verify: full in-engine completability run)
     ootmm::Seed seed;
     bool allowDebugMenus = false; // gate for the ports' debug/cheats/enhancements menus
     std::unique_ptr<MultiworldClient> multiworld; // null when playing single-world
@@ -681,6 +686,7 @@ ootmm::BootConfig MakeBootConfig(const Session& s, ootmm::Game game, std::option
     }
     boot.allowDebugMenus = s.allowDebugMenus;
     boot.selftestReportPath = s.selftestReport.string();
+    boot.selftestMode = s.selftestMode;
     boot.bootGame = game;
     boot.bootEntrance = bootEntrance;
     boot.ootAge = ootAge;
@@ -693,8 +699,17 @@ std::optional<std::string> PrepareSession(Session& session, const fs::path& sess
     const fs::path sessionRoot =
         !sessionDirOverride.empty() ? fs::absolute(sessionDirOverride)
                                     : fs::absolute(session.seedPath.parent_path() / ".ootmm-session");
-    const std::string seedKey = SeedSessionKey(session.seed);
+    std::string seedKey = SeedSessionKey(session.seed);
+    // verify runs get an isolated "-verify" session wiped each run; real playthroughs untouched
+    const bool verifyRun = !session.selftestMode.empty() && session.selftestMode != "audit";
+    if (verifyRun) {
+        seedKey += "-verify";
+    }
     const fs::path sessionDir = sessionRoot / seedKey;
+    if (verifyRun) {
+        std::error_code wipeEc;
+        fs::remove_all(sessionDir, wipeEc);
+    }
 
     std::error_code ec;
     fs::create_directories(sessionDir, ec);
@@ -792,6 +807,7 @@ using ootmm::launcher::Accent;
 using ootmm::launcher::LauncherConfig;
 using ootmm::launcher::ModEntry;
 using ootmm::launcher::Tracker;
+using ootmm::launcher::Progress;
 using ootmm::launcher::UiHost;
 
 constexpr wchar_t kHostClassName[] = L"OotmmLauncherHost";
@@ -839,6 +855,7 @@ struct ConfigForm {
 
     std::optional<ootmm::Seed> seed; // preview of the seed at seedPath
     std::string seedError;
+    std::string seedWarning; // unsupported-settings notice (seed loads, but listed features won't function)
     std::string loadedSeedPath; // seedPath the preview was loaded from
 
     std::vector<ModEntry> ootMods;
@@ -878,6 +895,11 @@ struct GuiApp {
 
     fs::path sessionDirOverride; // from --session
     bool selftestArmed = false;  // from --selftest: arm the in-game check-claim audit
+    bool verifyArmed = false;    // from --verify: full in-engine completability verification run
+    uintmax_t verifyReportOffset = 0; // read cursor into the verify report (JSONL)
+    int verifyOotPass = -1;           // -1 pending, 0 fail, 1 pass
+    int verifyMmPass = -1;
+    bool verifyDone = false;
     std::optional<ootmm::Game> startOverride;
 
     // First-time setup flow: games queued for a setup-only run (the port's own first-boot
@@ -897,7 +919,9 @@ struct GuiApp {
     bool relayStarted = false;
     bool autoLaunch = false; // full CLI args given: launch immediately
     bool cheatGateDirty = false; // allowDebugMenus changed; applies on next game boot
-    int sidebarTab = 0;          // 0 tracker, 1 log, 2 session, 3 options
+    int sidebarTab = 0;          // 0 tracker, 1 log, 2 session, 3 options, 4 progress
+    int progressCategory = 0;    // Progress tab: 0 Overview,1 Dungeons,2 Souls,3 Songs,4 Key Items
+    ootmm::launcher::Progress progress;
     bool quit = false;
 };
 
@@ -1720,6 +1744,111 @@ bool HandlePresenceLine(GuiApp& app, const std::string& line) {
 
 // Per-UI-frame presence pump: forward fresh local poses, stream pending model chunks, and
 // mirror the (expired-filtered) remote roster into the active port's presence-in file.
+
+// --- Verify watcher (--verify) ---------------------------------------------------------------
+// logic sweep proves a collection ORDER exists; engine stages prove every check resolves/delivers/persists
+
+bool VerifyLogicFullClear(GuiApp& app, int& reachedOut, int& totalOut) {
+    // My own world's placements only: location name -> item id.
+    std::unordered_map<std::string, std::string> locItem;
+    for (const ootmm::ItemPlacement& p : app.session.seed.placements) {
+        const std::string& name = !p.check.name.empty() ? p.check.name : p.check.id;
+        locItem.emplace(name, p.item.id);
+    }
+    ootmm::launcher::LogicSolver::Input input;
+    for (const ootmm::StartingItem& starting : app.session.seed.startingItems) {
+        input.items[starting.item.id] += starting.count;
+        input.licenses[starting.item.id] += starting.count;
+    }
+    std::unordered_set<std::string> collected;
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        const std::unordered_set<std::string> reachable = app.solver.Solve(input);
+        for (const auto& [loc, itemId] : locItem) {
+            if (collected.count(loc) != 0 || reachable.count(loc) == 0) {
+                continue;
+            }
+            collected.insert(loc);
+            grew = true;
+            ++input.items[itemId];
+            if (app.solver.IsRenewableLocation(loc)) {
+                ++input.renewables[itemId];
+            }
+            if (app.solver.IsLicenseLocation(loc)) {
+                ++input.licenses[itemId];
+            }
+        }
+    }
+    reachedOut = static_cast<int>(collected.size());
+    totalOut = static_cast<int>(locItem.size());
+    if (reachedOut != totalOut) {
+        // Name the unreachable tail (capped) so a FAIL is immediately debuggable.
+        int listed = 0;
+        for (const auto& [loc, itemId] : locItem) {
+            if (collected.count(loc) == 0 && listed < 25) {
+                std::cout << "[verify]   unreachable in logic: " << loc << " (" << itemId << ")" << std::endl;
+                ++listed;
+            }
+        }
+    }
+    return reachedOut == totalOut;
+}
+
+void PumpVerifyWatcher(GuiApp& app) {
+    if (!app.verifyArmed || app.verifyDone || app.session.selftestReport.empty()) {
+        return;
+    }
+    const ootmm::FilePacketReadResult lines =
+        ootmm::ReadPacketLines(app.session.selftestReport, app.verifyReportOffset);
+    app.verifyReportOffset = lines.nextOffset;
+    for (const std::string& line : lines.packets) {
+        if (line.find("\"event\":\"verifySummary\"") == std::string::npos) {
+            continue;
+        }
+        const std::string game = ootmm::relay::ExtractJsonStringField(line, "game");
+        const bool pass = line.find("\"pass\":true") != std::string::npos;
+        if (game == "oot") {
+            app.verifyOotPass = pass ? 1 : 0;
+        } else if (game == "mm") {
+            app.verifyMmPass = pass ? 1 : 0;
+        }
+        std::cout << "[verify] " << game << " engine stage: " << (pass ? "PASS" : "FAIL") << std::endl;
+    }
+    if (app.verifyOotPass < 0 || app.verifyMmPass < 0) {
+        return;
+    }
+    app.verifyDone = true;
+    int reached = 0;
+    int total = 0;
+    int logicPass = -1; // -1 = not evaluated (multiworld / no logic data)
+    if (app.session.seed.playerCount == 1 && app.solver.Loaded()) {
+        logicPass = VerifyLogicFullClear(app, reached, total) ? 1 : 0;
+    }
+    const bool enginePass = app.verifyOotPass == 1 && app.verifyMmPass == 1;
+    const bool pass = enginePass && logicPass != 0;
+    std::cout << "[verify] ================================================================" << std::endl;
+    std::cout << "[verify] engine: oot=" << (app.verifyOotPass == 1 ? "PASS" : "FAIL")
+              << " mm=" << (app.verifyMmPass == 1 ? "PASS" : "FAIL") << std::endl;
+    if (logicPass >= 0) {
+        std::cout << "[verify] logic full-clear: " << reached << "/" << total << " locations — "
+                  << (logicPass == 1 ? "PASS" : "FAIL") << std::endl;
+    } else {
+        std::cout << "[verify] logic full-clear: skipped ("
+                  << (app.session.seed.playerCount > 1 ? "multiworld: per-world logic is generator-guaranteed"
+                                                       : "seed has no logic data")
+                  << ")" << std::endl;
+    }
+    std::cout << "[verify] SEED VERDICT: " << (pass ? "PASS — completable end-to-end" : "FAIL — see report")
+              << std::endl;
+    std::cout << "[verify] report: " << app.session.selftestReport.string() << std::endl;
+    std::cout << "[verify] ================================================================" << std::endl;
+    std::ofstream out(app.session.selftestReport, std::ios::app);
+    out << "{\"event\":\"seedVerdict\",\"pass\":" << (pass ? "true" : "false")
+        << ",\"engineOot\":" << app.verifyOotPass << ",\"engineMm\":" << app.verifyMmPass
+        << ",\"logicReached\":" << reached << ",\"logicTotal\":" << total << "}\n";
+}
+
 void PumpPresence(GuiApp& app) {
     Session& s = app.session;
     // The roster-file mirror at the bottom must run even in SOLO sessions: the roster is empty
@@ -1877,13 +2006,13 @@ void PumpMultiworld(GuiApp& app) {
             app.tracker.AddRemoteReceipt(event->item.id, event->deliveryKey);
             continue;
         }
-        // Check completions from other players AND the server's join replay (the relay stores
-        // every check/item packet and replays the room history to joiners, so a fresh save
-        // restores its collected-check state without recollecting anything).
+        // only OUR relay history may mark the tracker — foreign completions are other worlds' copies of the same check ids
         if (const auto check = ootmm::anchor::ParseCheckCompletePacket(line); check.has_value()) {
-            app.tracker.MarkCollected(check->checkGame, check->checkId, check->item.name, check->targetPlayer,
-                                      s.seed.playerId, /*logIt=*/false);
-            forActiveGame.push_back(line); // the game marks the check completed in its runtime
+            if (check->sourcePlayer == s.seed.playerId) {
+                app.tracker.MarkCollected(check->checkGame, check->checkId, check->item.name, check->targetPlayer,
+                                          s.seed.playerId, /*logIt=*/false);
+            }
+            forActiveGame.push_back(line); // the game world-scopes and marks it in its runtime
             continue;
         }
         // Server console chat (/say) and teleport orders are surfaced/forwarded as-is.
@@ -2030,6 +2159,21 @@ void RefreshSeedPreview(ConfigForm& form) {
     }
     try {
         form.seed = ootmm::LoadSeedFromFile(form.loadedSeedPath);
+        form.seedWarning.clear();
+        // warn loudly on unsupported-but-enabled settings (their items/gates are non-functional)
+        const std::vector<std::string> unsupported = form.seed->UnsupportedEnabledSettings();
+        if (!unsupported.empty()) {
+            std::string list;
+            for (const std::string& key : unsupported) {
+                if (!list.empty()) {
+                    list += ", ";
+                }
+                list += key;
+            }
+            form.seedWarning = "This seed enables features the PC port does not support yet: " + list +
+                               ". Items/gates for these will not function — regenerate the seed with them off.";
+            std::cout << "[launcher] WARNING: " << form.seedWarning << std::endl;
+        }
     } catch (const std::exception& error) {
         form.seedError = error.what();
     }
@@ -2437,13 +2581,19 @@ bool LaunchFromForm(GuiApp& app) {
     session.ootExe = fs::absolute(fs::path(form.ootExe));
     session.mmExe = fs::absolute(fs::path(form.mmExe));
     session.allowDebugMenus = app.cfg.allowDebugMenus;
+    session.selftestMode = app.verifyArmed ? "verify" : (app.selftestArmed ? "audit" : "");
 
     if (const auto error = PrepareSession(session, app.sessionDirOverride); error.has_value()) {
         form.validationErrors.push_back(*error);
         return false;
     }
 
-    if (isMultiworld) {
+    // verify runs are SOLO: joining the relay would poison the seed's real room with a persisted collect flood
+    const bool relayVerifyRun = !session.selftestMode.empty() && session.selftestMode != "audit";
+    if (isMultiworld && relayVerifyRun) {
+        std::cout << "[launcher] verify run: multiworld relay join skipped (scratch session)" << std::endl;
+    }
+    if (isMultiworld && !relayVerifyRun) {
         if (form.hostRelay) {
             // The relay thread outlives sessions, so its PvP rule lives in a shared atomic:
             // re-hosting with a different checkbox state updates the running relay (which
@@ -2484,11 +2634,12 @@ bool LaunchFromForm(GuiApp& app) {
                   << std::endl;
     }
 
-    if (app.selftestArmed) {
+    if (app.selftestArmed || app.verifyArmed) {
         session.selftestReport = session.statePath.parent_path() / "selftest-report.jsonl";
         std::error_code ec;
         fs::remove(session.selftestReport, ec); // fresh report per run
-        std::cout << "[launcher] self-test armed — report: " << session.selftestReport.string() << std::endl;
+        std::cout << "[launcher] " << (app.verifyArmed ? "verify" : "self-test")
+                  << " armed — report: " << session.selftestReport.string() << std::endl;
     }
 
     app.session = std::move(session);
@@ -2518,7 +2669,7 @@ bool LaunchFromForm(GuiApp& app) {
     app.run = RuntimeState{};
     app.run.activeGame = app.startOverride.value_or(app.session.seed.ResolveStartingGame());
     app.startOverride.reset(); // a --start override applies to the first launch only
-    if (app.selftestArmed && app.run.activeGame == ootmm::Game::Oot) {
+    if ((app.selftestArmed || app.verifyArmed) && app.run.activeGame == ootmm::Game::Oot) {
         // Fully unattended self-test: boot straight past title/file-select into gameplay (the
         // same handoff boot the cross-game transition uses); the armed walker takes over from
         // there. 0x00BB = Link's House child spawn.
@@ -2989,6 +3140,10 @@ void DrawConfigScreen(GuiApp& app) {
                                 seed.playerCount > 1 ? " - MULTIWORLD" : "");
         } else if (!form.seedError.empty()) {
             ImGui::TextColored(ImVec4(0.92f, 0.40f, 0.34f, 1.0f), "%s", form.seedError.c_str());
+        } else if (!form.seedWarning.empty()) {
+            ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), "%s", form.seedWarning.c_str());
+            ImGui::PopTextWrapPos();
         } else {
             ImGui::TextDisabled("Choose the seed to play.");
         }
@@ -3410,6 +3565,80 @@ void DrawGameConfigModal(GuiApp& app) {
 
 // --- Runtime manager sidebar --------------------------------------------------
 
+// shared check list (Tracker tab + Progress->Checks); spoiler-safe: item shown only once collected
+void DrawCheckList(GuiApp& app, const char* filter, int gameFilter, bool hideCollected, bool onlyInLogic,
+                   const char* childName) {
+    std::string needle = filter;
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    std::vector<int> visible;
+    const std::vector<ootmm::launcher::TrackerCheck>& checks = app.tracker.Checks();
+    for (int i = 0; i < static_cast<int>(checks.size()); ++i) {
+        const ootmm::launcher::TrackerCheck& check = checks[i];
+        if (hideCollected && check.collected) {
+            continue;
+        }
+        if (onlyInLogic && app.solver.Loaded() && (!check.inLogic || check.collected)) {
+            continue;
+        }
+        if (gameFilter == 1 && check.game != ootmm::Game::Oot) {
+            continue;
+        }
+        if (gameFilter == 2 && check.game != ootmm::Game::Mm) {
+            continue;
+        }
+        if (!needle.empty()) {
+            std::string haystack = check.name;
+            std::transform(haystack.begin(), haystack.end(), haystack.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (haystack.find(needle) == std::string::npos) {
+                continue;
+            }
+        }
+        visible.push_back(i);
+    }
+
+    ImGui::BeginChild(childName, ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(visible.size()));
+    while (clipper.Step()) {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+            const ootmm::launcher::TrackerCheck& check = checks[visible[row]];
+            const bool isOot = check.game == ootmm::Game::Oot;
+            const ImVec4 tagColor = isOot ? ImVec4(0.79f, 0.64f, 0.24f, 1.0f) : ImVec4(0.58f, 0.44f, 0.86f, 1.0f);
+
+            // Availability dot: green = reachable in logic right now, gray = not yet.
+            if (app.solver.Loaded() && !check.collected) {
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                const ImVec2 pos = ImGui::GetCursorScreenPos();
+                const ImU32 dotColor =
+                    check.inLogic ? IM_COL32(115, 210, 120, 255) : IM_COL32(110, 104, 92, 160);
+                draw->AddCircleFilled(ImVec2(pos.x + 5.0f, pos.y + ImGui::GetTextLineHeight() * 0.55f), 3.5f,
+                                      dotColor);
+                ImGui::Dummy(ImVec2(13.0f, 0.0f));
+                ImGui::SameLine(0.0f, 0.0f);
+            }
+
+            ImGui::TextColored(tagColor, isOot ? "[OoT]" : "[MM]");
+            ImGui::SameLine();
+            if (check.collected) {
+                ImGui::TextDisabled("%s -> %s%s", check.name.c_str(), check.itemName.c_str(),
+                                    check.ownerPlayer != app.session.seed.playerId ? " (another player's item)" : "");
+            } else {
+                ImGui::TextUnformatted(check.name.c_str());
+                if (ImGui::IsItemHovered() && !check.type.empty()) {
+                    ImGui::SetTooltip("Type: %s%s", check.type.c_str(),
+                                      app.solver.Loaded() ? (check.inLogic ? "\nIn logic with your current items."
+                                                                           : "\nNot yet reachable in logic.")
+                                                          : "");
+                }
+            }
+        }
+    }
+    ImGui::EndChild();
+}
+
 void DrawTrackerTab(GuiApp& app) {
     Tracker& tracker = app.tracker;
     const Palette pal = CurrentPalette(app);
@@ -3447,77 +3676,191 @@ void DrawTrackerTab(GuiApp& app) {
     }
     ImGui::Spacing();
 
-    // Case-insensitive substring filter.
-    std::string needle = filter;
-    std::transform(needle.begin(), needle.end(), needle.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    DrawCheckList(app, filter, gameFilter, hideCollected, onlyInLogic, "trackerList");
+}
 
-    static std::vector<int> visible;
-    visible.clear();
-    const std::vector<ootmm::launcher::TrackerCheck>& checks = tracker.Checks();
-    for (int i = 0; i < static_cast<int>(checks.size()); ++i) {
-        const ootmm::launcher::TrackerCheck& check = checks[i];
-        if (hideCollected && check.collected) {
-            continue;
-        }
-        if (onlyInLogic && app.solver.Loaded() && (!check.inLogic || check.collected)) {
-            continue;
-        }
-        if (gameFilter == 1 && check.game != ootmm::Game::Oot) {
-            continue;
-        }
-        if (gameFilter == 2 && check.game != ootmm::Game::Mm) {
-            continue;
-        }
-        if (!needle.empty()) {
-            std::string haystack = check.name;
-            std::transform(haystack.begin(), haystack.end(), haystack.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (haystack.find(needle) == std::string::npos) {
-                continue;
-            }
-        }
-        visible.push_back(i);
+// --- Progress tab: cross-game organized view (fed by ootmm::launcher::Progress) ---
+
+static const ImVec4 kOotTag(0.79f, 0.64f, 0.24f, 1.0f);
+static const ImVec4 kMmTag(0.58f, 0.44f, 0.86f, 1.0f);
+static const ImVec4 kOwned(0.55f, 0.85f, 0.50f, 1.0f);
+static const ImVec4 kMissing(0.55f, 0.55f, 0.55f, 0.65f);
+
+static const ImVec4& GameTagColor(ootmm::Game g) {
+    return g == ootmm::Game::Oot ? kOotTag : kMmTag;
+}
+
+// "present" = the dungeon has this slot in this seed; only then show the check/cross badge.
+static void SlotBadge(const char* label, bool have, bool present) {
+    if (!present) {
+        return;
     }
+    ImGui::SameLine();
+    if (have) {
+        ImGui::TextColored(kOwned, "%s \xE2\x9C\x93", label); // ✓
+    } else {
+        ImGui::TextDisabled("%s \xE2\x9C\x97", label); // ✗
+    }
+}
 
-    ImGui::BeginChild("trackerList", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGuiListClipper clipper;
-    clipper.Begin(static_cast<int>(visible.size()));
-    while (clipper.Step()) {
-        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-            const ootmm::launcher::TrackerCheck& check = checks[visible[row]];
-            const bool isOot = check.game == ootmm::Game::Oot;
-            const ImVec4 tagColor = isOot ? ImVec4(0.79f, 0.64f, 0.24f, 1.0f) : ImVec4(0.58f, 0.44f, 0.86f, 1.0f);
+static void CountBadge(const char* label, int have, int total) {
+    if (total <= 0) {
+        return;
+    }
+    ImGui::SameLine();
+    const ImVec4 c = have >= total ? kOwned : ImVec4(0.85f, 0.75f, 0.40f, 1.0f);
+    ImGui::TextColored(c, "%s %d/%d", label, have, total);
+}
 
-            // Availability dot: green = reachable in logic right now, gray = not yet.
-            if (app.solver.Loaded() && !check.collected) {
-                ImDrawList* draw = ImGui::GetWindowDrawList();
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                const ImU32 dotColor =
-                    check.inLogic ? IM_COL32(115, 210, 120, 255) : IM_COL32(110, 104, 92, 160);
-                draw->AddCircleFilled(ImVec2(pos.x + 5.0f, pos.y + ImGui::GetTextLineHeight() * 0.55f), 3.5f,
-                                      dotColor);
-                ImGui::Dummy(ImVec2(13.0f, 0.0f));
-                ImGui::SameLine(0.0f, 0.0f);
-            }
+static void DrawProgressOverview(GuiApp& app) {
+    const auto& p = app.progress;
+    const ootmm::Seed& seed = app.session.seed;
 
-            ImGui::TextColored(tagColor, isOot ? "[OoT]" : "[MM]");
+    ImGui::TextUnformatted("Checks");
+    ImGui::BulletText("Total: %d / %d", p.Checks().have, p.Checks().total);
+    ImGui::BulletText("Items collected: %d", p.ItemsOwned());
+    ImGui::TextColored(kOotTag, "  [OoT] %d / %d", p.Checks().ootHave, p.Checks().ootTotal);
+    ImGui::TextColored(kMmTag, "  [MM]  %d / %d", p.Checks().mmHave, p.Checks().mmTotal);
+    if (seed.playerCount > 1) {
+        ImGui::TextDisabled("Multiworld: player %d of %d", seed.playerId, seed.playerCount);
+    }
+    ImGui::Spacing();
+
+    ImGui::TextUnformatted("Goals");
+    const std::vector<ootmm::launcher::GoalProgress>& goals = p.Goals();
+    if (goals.empty()) {
+        ImGui::TextDisabled("  (no goal data in this seed)");
+    }
+    for (const ootmm::launcher::GoalProgress& g : goals) {
+        if (!g.active) {
+            ImGui::TextDisabled("  %s: off", g.name);
+        } else {
+            const ImVec4 c = g.satisfied ? kOwned : ImVec4(0.92f, 0.40f, 0.34f, 1.0f);
+            ImGui::TextColored(c, "  %s: %d / %d%s", g.name, g.owned, g.threshold, g.satisfied ? "  \xE2\x9C\x93" : "");
+        }
+    }
+    ImGui::Spacing();
+    ImGui::TextDisabled("Note: goal progress counts the families the ports also gate on\n"
+                        "(stones / medallions / remains / skulls / stray fairies).");
+}
+
+static void DrawProgressDungeons(GuiApp& app) {
+    const std::vector<ootmm::launcher::DungeonProgress>& dungeons = app.progress.Dungeons();
+    if (dungeons.empty()) {
+        ImGui::TextDisabled("No dungeon data in this seed.");
+        return;
+    }
+    for (const ootmm::launcher::DungeonProgress& d : dungeons) {
+        ImGui::TextColored(GameTagColor(d.game), d.game == ootmm::Game::Oot ? "[OoT]" : "[MM]");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(d.name);
+        if (d.skeletonOwned) {
             ImGui::SameLine();
-            if (check.collected) {
-                // Once collected the placement is public knowledge, so show the item inline.
-                ImGui::TextDisabled("%s -> %s%s", check.name.c_str(), check.itemName.c_str(),
-                                    check.ownerPlayer != app.session.seed.playerId ? " (another player's item)" : "");
+            ImGui::TextColored(kOwned, "Keys \xE2\x9C\x93"); // ✓ skeleton key opens every door
+        } else if (d.keysTotal > 0) {
+            CountBadge("Keys", d.keysHave, d.keysTotal);
+        } else if (d.hasKeyRing) {
+            SlotBadge("Ring", d.keyRing, true);
+        }
+        SlotBadge("Map", d.map, d.hasMap);
+        SlotBadge("Comp", d.compass, d.hasCompass);
+        SlotBadge("BK", d.bossKey, d.hasBossKey);
+        CountBadge("Fairies", d.fairiesHave, d.fairiesTotal);
+    }
+}
+
+static void DrawItemProgressList(const std::vector<ootmm::launcher::ItemProgress>& list, const char* emptyMsg) {
+    int have = 0;
+    for (const auto& it : list) {
+        if (it.owned) {
+            have++;
+        }
+    }
+    ImGui::TextDisabled("%d / %d", have, static_cast<int>(list.size()));
+    ImGui::Spacing();
+    if (list.empty()) {
+        ImGui::TextDisabled("%s", emptyMsg);
+        return;
+    }
+    for (const ootmm::launcher::ItemProgress& it : list) {
+        ImGui::TextColored(it.owned ? kOwned : kMissing, "%s %s", it.owned ? "\xE2\x9C\x93" : "\xE2\x97\x8B",
+                           it.name.c_str()); // ✓ / ○
+    }
+}
+
+static int GameRadio() {
+    static int game = 0; // 0 OoT, 1 MM
+    ImGui::RadioButton("OoT", &game, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("MM", &game, 1);
+    return game;
+}
+
+static void DrawProgressSouls(GuiApp& app) {
+    const ootmm::Game g = GameRadio() == 0 ? ootmm::Game::Oot : ootmm::Game::Mm;
+    ImGui::Spacing();
+    const char* subNames[] = { "Enemy", "Boss", "NPC", "Animal", "Misc" };
+    for (int s = 0; s < ootmm::launcher::kSoulSubCount; ++s) {
+        const std::vector<ootmm::launcher::ItemProgress>& list =
+            app.progress.Souls(g, static_cast<ootmm::launcher::SoulSub>(s));
+        int have = 0;
+        for (const auto& it : list) {
+            if (it.owned) {
+                have++;
+            }
+        }
+        if (ImGui::TreeNode(subNames[s], "%s Souls  %d / %d", subNames[s], have, static_cast<int>(list.size()))) {
+            if (list.empty()) {
+                ImGui::TextDisabled("  (not shuffled)");
             } else {
-                ImGui::TextUnformatted(check.name.c_str());
-                if (ImGui::IsItemHovered() && !check.type.empty()) {
-                    // Deliberately does NOT reveal the placed item - that would spoil the seed.
-                    ImGui::SetTooltip("Type: %s%s", check.type.c_str(),
-                                      app.solver.Loaded() ? (check.inLogic ? "\nIn logic with your current items."
-                                                                           : "\nNot yet reachable in logic.")
-                                                          : "");
+                for (const ootmm::launcher::ItemProgress& it : list) {
+                    ImGui::TextColored(it.owned ? kOwned : kMissing, "  %s %s",
+                                       it.owned ? "\xE2\x9C\x93" : "\xE2\x97\x8B", it.name.c_str());
                 }
             }
+            ImGui::TreePop();
         }
+    }
+}
+
+static void DrawProgressSongs(GuiApp& app) {
+    const ootmm::Game g = GameRadio() == 0 ? ootmm::Game::Oot : ootmm::Game::Mm;
+    ImGui::SameLine();
+    ImGui::TextDisabled("mode: %s", app.session.seed.GetStringSetting("songs", "anywhere").c_str());
+    ImGui::Spacing();
+    DrawItemProgressList(app.progress.Songs(g), "(no songs in pool)");
+}
+
+static void DrawProgressKeyItems(GuiApp& app) {
+    const ootmm::Game g = GameRadio() == 0 ? ootmm::Game::Oot : ootmm::Game::Mm;
+    ImGui::Spacing();
+    ImGui::TextDisabled("Major items in your world (owned / total):");
+    ImGui::Spacing();
+    DrawItemProgressList(app.progress.KeyItems(g), "(no major items)");
+}
+
+void DrawProgressTab(GuiApp& app) {
+    app.progress.BuildIfDirty(app.session.seed, app.tracker);
+
+    // dropdown + one scrolling child (same structure as the Tracker tab, which scrolls correctly here)
+    if (app.progressCategory > 4) {
+        app.progressCategory = 0;
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Category");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::Combo("##progcat", &app.progressCategory, "Overview\0Dungeons\0Souls\0Songs\0Key Items\0");
+    ImGui::Spacing();
+
+    ImGui::BeginChild("progContent", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    switch (app.progressCategory) {
+    case 0: DrawProgressOverview(app); break;
+    case 1: DrawProgressDungeons(app); break;
+    case 2: DrawProgressSouls(app); break;
+    case 3: DrawProgressSongs(app); break;
+    default: DrawProgressKeyItems(app); break;
     }
     ImGui::EndChild();
 }
@@ -3625,12 +3968,10 @@ void DrawSessionTab(GuiApp& app) {
     const float buttonHeight = 38.0f * app.cfg.uiScale;
     if (IconTextButton(app, run.activeGame == ootmm::Game::Oot ? "OcarinaOfTime" : "FierceDeityMask",
                        "Restart active game", buttonHeight)) {
-        // Relaunch from the last save (title screen boot, no forced entrance).
+        // keep run.bootEntrance: restart resumes where the player entered (main menus unreachable mid-session)
         if (run.process && run.process->Running()) {
             run.process->Terminate();
         }
-        run.bootEntrance.reset();
-        run.bootOotAge.reset();
         StartActiveGame(app);
     }
     WrappedTooltip(app, "Closes and relaunches %s from its last save.", GameTitle(run.activeGame));
@@ -3820,11 +4161,10 @@ void DrawOptionsTab(GuiApp& app) {
     if (app.cheatGateDirty) {
         ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.35f, 1.0f), "Pending - restart the game to apply.");
         if (ImGui::Button("Restart game now")) {
+            // keep run.bootEntrance: relaunch resumes in-place (main menu unreachable in-session)
             if (app.run.process && app.run.process->Running()) {
                 app.run.process->Terminate();
             }
-            app.run.bootEntrance.reset();
-            app.run.bootOotAge.reset();
             StartActiveGame(app);
         }
     }
@@ -3903,16 +4243,17 @@ void DrawRuntimeSidebar(GuiApp& app) {
     // Icon tab rail: dungeon map = tracker, notebook = log, sword = session, lens = options.
     {
         const float railWidth = ImGui::GetContentRegionAvail().x;
-        const float tabWidth = (railWidth - 3.0f * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
+        const float tabWidth = (railWidth - 4.0f * ImGui::GetStyle().ItemSpacing.x) / 5.0f;
         struct TabDef {
             const char* icon;
             const char* tooltip;
         };
-        const TabDef tabs[4] = { { "DungeonMap", "Tracker - open checks" },
+        const TabDef tabs[5] = { { "DungeonMap", "Tracker - open checks" },
                                  { "BombersNotebook", "Check log" },
                                  { "KokiriSword", "Session - restart / reset" },
-                                 { "LensOfTruth", "Options & appearance" } };
-        for (int i = 0; i < 4; ++i) {
+                                 { "LensOfTruth", "Options & appearance" },
+                                 { "Compass", "Progress - both games at a glance" } };
+        for (int i = 0; i < 5; ++i) {
             if (i > 0) {
                 ImGui::SameLine();
             }
@@ -3932,6 +4273,9 @@ void DrawRuntimeSidebar(GuiApp& app) {
         break;
     case 2:
         DrawSessionTab(app);
+        break;
+    case 4:
+        DrawProgressTab(app);
         break;
     default:
         DrawOptionsTab(app);
@@ -4070,6 +4414,7 @@ int RunGui(GuiApp& app) {
         if (app.stage == Stage::Runtime && app.run.process) {
             PumpMultiworld(app);
             PumpPresence(app);
+            PumpVerifyWatcher(app);
         }
 
         // Clicking into the game area hands keyboard focus to the embedded game (clicks
@@ -4328,6 +4673,7 @@ int main(int argc, char** argv) {
     app.sessionDirOverride = args->sessionDir;
     app.startOverride = args->startOverride;
     app.selftestArmed = args->selftest;
+    app.verifyArmed = args->verify;
     app.autoLaunch = args->CompleteGameArgs();
 
     SyncFormFromConfig(app);

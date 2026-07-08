@@ -56,4 +56,9 @@ struct CamcColor {
 // custom color-overlay renderers (gold skulltulas, freestanding) where no native CSMC exists.
 [[nodiscard]] CamcColor CamcTypeColor(CamcCategory category);
 
+// og progressive-tier display name (text.c kItemNames after Item_Progressive resolution), picked
+// by prior-grant count of the same itemId; empty = not tier-named (priorGrants=0 for foreign-player display).
+[[nodiscard]] std::string ProgressiveTierName(const Seed& seed, Game game, const std::string& itemId,
+                                              std::size_t priorGrants);
+
 } // namespace ootmm

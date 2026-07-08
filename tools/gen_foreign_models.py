@@ -16,7 +16,18 @@ import sys
 import zipfile
 from pathlib import Path
 
-from foreign_model_common import namespace_path
+
+def namespace_path(path: str, ns: str) -> str:
+    """Namespace the dir component of objects/object_X/entry (works with __OTR__ prefix)."""
+    otr = ""
+    p = path
+    if p.startswith("__OTR__"):
+        otr, p = "__OTR__", p[len("__OTR__"):]
+    parts = p.split("/")
+    if len(parts) >= 3 and parts[0] == "objects" and parts[1].startswith("object_"):
+        parts[1] = f"{ns}_obj_" + parts[1][len("object_"):]
+        return otr + "/".join(parts)
+    return path
 
 ROOT = Path(__file__).resolve().parents[1]
 SHIP = ROOT / "external/Shipwright"

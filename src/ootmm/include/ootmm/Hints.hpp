@@ -35,4 +35,8 @@ namespace ootmm::hints {
 // when the song is split into notes (detected from the oathToOrder region list).
 [[nodiscard]] std::string OathToOrderText(const Seed& seed);
 
+// MM boss-remains reveal (the green target spot, og En_Talk 0x18): the regions of the four
+// temple rewards — dungeonRewards[9..12] (Odolwa/Goht/Gyorg/Twinmold Remains).
+[[nodiscard]] std::string RemainsHintText(const Seed& seed);
+
 } // namespace ootmm::hints

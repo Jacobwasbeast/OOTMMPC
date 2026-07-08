@@ -272,6 +272,8 @@ std::vector<CsmcFamily> CsmcFamiliesFor(const std::string& game) {
         return {
             { "Bush", "tint", "objects/gameplay_field_keep/gFieldBushDL" },
             { "Grass", "tint", "objects/object_kusa/object_kusa_DL_000140" },
+            // og EnIshi_DrawSmall: CUSTOM_ROCK = grayscale rock tex (gamma 0.25) x csmcTypeColor
+            { "Rock", "tint", "objects/gameplay_field_keep/gFieldKakeraDL" },
             { "Pot", "pot", "objects/object_tsubo/object_tsubo_DL_0017C0",
               "objects/object_tsubo/object_tsubo_Tex_000000", "objects/object_tsubo/object_tsubo_Tex_001000" },
             { "Crate", "crate", "objects/object_kibako2/gLargeCrateDL", "", "",
@@ -296,6 +298,10 @@ std::vector<CsmcFamily> CsmcFamiliesFor(const std::string& game) {
               "objects/object_kibako2/gLargeCrateTLUT" },
             { "SmallCrate", "crate_small", "objects/object_kibako/gSmallCrateDL", "", "", {}, "",
               "objects/object_kibako/gSmallCrateTex" },
+            // og csmc_chest.c (MM): og "front" tex (32x64) = MM lock slot, "side" (32x32) = corner slot
+            { "Chest", "chest", "", "objects/object_box/gBoxChestCornerTex", "", {}, "", "",
+              "objects/object_box/gBoxChestBaseDL", "objects/object_box/gBoxChestLidDL",
+              "objects/object_box/gBoxChestLockTex" },
         };
     }
     return {};

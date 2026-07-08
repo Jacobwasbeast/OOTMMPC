@@ -98,6 +98,14 @@ class Runtime {
     // must survive reboots (e.g. the OoT silver-rupee doors).
     [[nodiscard]] std::size_t CountGrantedItemId(const std::string& itemId) const;
 
+    // Every item id delivered to the LOCAL player, durable across reboots; the correct source for
+    // rebuilding ownership sets at load (in multiworld a placement scan misses remote-world items).
+    [[nodiscard]] const std::set<std::string>& ObtainedItemIds() const;
+
+    // Like CountGrantedItemId but excludes "regrant:" duplicates, so each item counts exactly once
+    // across both games — og's special-condition multiplicity (config.c).
+    [[nodiscard]] std::size_t CountGrantedItemIdOnce(const std::string& itemId) const;
+
     // Save-consistency guard. An item is GRANTED into the engine's in-memory save the instant it is
     // pumped, but the native .sav is a separate file written later. If the progress ledger is persisted
     // while the .sav is not (e.g. a cross-game handoff that forgot to flush the save), the ledger claims

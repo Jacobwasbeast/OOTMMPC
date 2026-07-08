@@ -25,6 +25,9 @@ std::string SerializeBootConfig(const BootConfig& config) {
     if (!config.selftestReportPath.empty()) {
         out << ",\"selftestReportPath\":" << json::EscapeString(config.selftestReportPath);
     }
+    if (!config.selftestMode.empty()) {
+        out << ",\"selftestMode\":" << json::EscapeString(config.selftestMode);
+    }
     out << ",\"allowDebugMenus\":" << (config.allowDebugMenus ? "true" : "false");
     out << ",\"bootGame\":" << json::EscapeString(ToString(config.bootGame));
     if (config.bootEntrance.has_value()) {
@@ -63,6 +66,7 @@ std::optional<BootConfig> ParseBootConfig(const std::string& jsonText) {
         config.presenceInPath = str("presenceInPath");
         config.mmSaveDir = str("mmSaveDir");
         config.selftestReportPath = str("selftestReportPath");
+        config.selftestMode = str("selftestMode");
 
         if (const json::Value* allowDebug = root.Find("allowDebugMenus");
             allowDebug != nullptr && allowDebug->IsBool()) {
