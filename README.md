@@ -9,6 +9,20 @@ shared, and cross-game load zones (the Happy Mask Shop portal, warp songs, Song 
 hand you off between the two games seamlessly. Multiworld seeds connect multiple players
 through a relay server.
 
+## Screenshots
+
+**OOT**
+
+![OOT](images/oot.png)
+
+**OOT Post Agony**
+
+![OOT Post Agony](images/oot_post_agony.png)
+
+**MM**
+
+![MM](images/mm.png)
+
 ## Layout
 
 | Path | Contents |
