@@ -1,4 +1,5 @@
 # OoTMM PC
+This is not affiliated with the OoTMM project. It was simply a hobby project of mine, so support for future updates will have to be ported by me.
 
 A native PC implementation of [OoTMM](https://ootmm.com), the Ocarina of Time × Majora's Mask
 combo randomizer, built on the [Ship of Harkinian](https://github.com/HarbourMasters/Shipwright)
